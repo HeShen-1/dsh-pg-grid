@@ -5,7 +5,7 @@ export const ident = value => { if (typeof value !== 'string' || !value || value
 export const list = (v, max = 64) => { if (!Array.isArray(v) || v.length > max) fail('规则数量无效或超过限制'); return v; };
 export function only(obj, keys) { if (!obj || typeof obj !== 'object' || Array.isArray(obj) || Object.keys(obj).some(k => !keys.includes(k))) fail('存在未知规则字段'); }
 export function sources(plan) {
-  only(plan, ['source', 'joins', 'filters', 'computed', 'select', 'groupBy', 'measures', 'pivot', 'sort']);
+  only(plan, ['source', 'joins', 'filters', 'computed', 'select', 'groupBy', 'measures', 'pivot', 'sort', 'columnFilters']);
   const all = [plan.source, ...list(plan.joins ?? [], 7)];
   const aliases = new Set();
   for (const s of all) {
@@ -77,6 +77,7 @@ export function compile(plan, catalog) {
     joined.add(j.alias);
   }
   const field = id => { if (!fields.has(id)) fail('字段不存在或已变化：' + id); return ident(id); };
+  let filterFields = fields;
   const filter = (f, depth = 0) => {
     if (++nodes > 700 || depth > 8) fail('筛选条件过于复杂');
     if (f?.rules) {
@@ -86,12 +87,13 @@ export function compile(plan, catalog) {
       return children.length ? '(' + children.map(c => filter(c, depth + 1)).join(f.mode === 'and' ? ' AND ' : ' OR ') + ')' : 'TRUE';
     }
     only(f, ['field','op','value']);
-    const col = field(f.field);
+    if (!filterFields.has(f.field)) fail('筛选字段不存在：' + f.field);
+    const col = ident(f.field);
     if (f.op === 'isNull') return `${col} IS NULL`;
     if (f.op === 'notNull') return `${col} IS NOT NULL`;
     const operators = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
     if (operators[f.op]) { if (f.value === null || f.value === undefined) fail('空值请使用“为空/非空”'); return `${col} ${operators[f.op]} ${bind(f.value)}`; }
-    if (f.op === 'in') { const vals = list(f.value, 100); if (!vals.length) return 'FALSE'; return `${col} IN (${vals.map(bind).join(',')})`; }
+    if (['in','notIn'].includes(f.op)) { const vals = list(f.value, 1000); if (!vals.length) return f.op==='in'?'FALSE':'TRUE'; return `${col} ${f.op==='notIn'?'NOT IN':'IN'} (${vals.map(bind).join(',')})`; }
     if (['contains','starts','ends'].includes(f.op)) {
       if (typeof f.value !== 'string') fail('文本筛选需要文本');
       const value = f.value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
@@ -101,8 +103,23 @@ export function compile(plan, catalog) {
   };
   // Warning columns are not selectable and are counted before paging/aggregation.
   projection.push(`(${warnings.length ? warnings.join(' OR ') : 'FALSE'}) AS "__division_error"`);
+  const columnFilters = list(plan.columnFilters ?? [], 40);
+  const seenColumns = new Set();
+  for (const c of columnFilters) {
+    only(c, ['field','rule']);
+    if (seenColumns.has(c.field)) fail('列筛选重复');
+    seenColumns.add(c.field);
+    const check = (r,depth=0) => { if(depth>8) fail('筛选条件过于复杂'); if(r?.rules) list(r.rules,40).forEach(x=>check(x,depth+1)); else if(r?.field !== c.field) fail('列筛选只能引用本列'); };
+    check(c.rule);
+  }
   const where = plan.filters ? filter(plan.filters) : 'TRUE';
-  const prefix = `WITH base AS (SELECT ${projection.join(', ')} FROM ${from}), filtered AS (SELECT * FROM base WHERE ${where})`;
+  let prefix = `WITH base AS (SELECT ${projection.join(', ')} FROM ${from}), filtered AS (SELECT * FROM base WHERE ${where})`;
+  const warningsValues = values.slice();
+  const warningPrefix = prefix;
+  if (plan.pivot && columnFilters.length) {
+    for (const c of columnFilters) if (!(plan.groupBy ?? []).includes(c.field)) fail('透视表仅支持行维度的列筛选');
+    prefix = `WITH base AS (SELECT ${projection.join(', ')} FROM ${from}), filtered AS (SELECT * FROM base WHERE (${where}) AND ${columnFilters.map(c=>filter(c.rule)).join(' AND ')})`;
+  }
   const dims = list(plan.groupBy ?? [], 12); dims.forEach(field);
   const measures = list(plan.measures ?? [], 12), output = new Map();
   const agg = m => {
@@ -131,6 +148,10 @@ export function compile(plan, catalog) {
     selected.forEach(id => output.set(id, fields.get(id)));
   }
   dims.forEach(id => output.set(id, fields.get(id)));
+  if (!plan.pivot && columnFilters.length) {
+    filterFields = output;
+    body = `SELECT * FROM (${body}) AS column_result WHERE ${columnFilters.map(c=>filter(c.rule)).join(' AND ')}`;
+  }
   const order = list(plan.sort ?? [], 12).map(s => {
     only(s, ['field','direction']);
     if (!output.has(s.field) || !['asc','desc'].includes(s.direction)) fail('排序字段或方向无效');
@@ -139,8 +160,8 @@ export function compile(plan, catalog) {
   // Full row tie-breaker gives stable pagination even on tables without primary keys.
   const primary = [...output].filter(([,f])=>f.primary).map(([id])=>`${ident(id)} ASC NULLS LAST`);
   const sorted = `SELECT * FROM result ORDER BY ${[...order, ...primary, 'pg_catalog.row_to_json(result)::text'].join(',')}`;
-  return { prefix, body, values, fields: [...output].map(([id, f]) => ({ id, name: f.name ?? id, type: f.type })), pivot,
+  return { prefix, body, values, warningsValues, fields: [...output].map(([id, f]) => ({ id, name: f.name ?? id, type: f.type })), pivot,
     sql: `${prefix}, result AS (${body}) ${sorted}`,
     countSql: `${prefix}, result AS (${body}) SELECT count(*)::text AS total FROM result`,
-    warningsSql: `${prefix} SELECT count(*)::text AS count FROM filtered WHERE "__division_error"` };
+    warningsSql: `${warningPrefix} SELECT count(*)::text AS count FROM filtered WHERE "__division_error"` };
 }

@@ -6,3 +6,7 @@ docs/evidence/
 .env*
 credentials.json
 views.json
+
+# Local model-call authorization and private usage records
+ai-validation.json
+ai-validation.json.tmp

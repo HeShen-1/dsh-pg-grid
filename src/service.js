@@ -1,17 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { Store, CredentialStore } from './store.js';
 import { GridError, fail, compile, sources, only, list } from './query.js';
-import { connectionConfig, makePool, discover, execute, csv, read, catalog } from './database.js';
+import { connectionConfig, makePool, discover, execute, columnValues, csv, read, catalog } from './database.js';
 import { SYSTEM, decodePlan } from './ai.js';
 export class GridService {
-  constructor({ directory, model, aiEnabled = false, poolFactory = makePool }) { this.store = new Store(directory); this.credentials = new CredentialStore(directory); this.pools = new Map(); this.model = model; this.aiEnabled = aiEnabled; this.poolFactory = poolFactory; this.disposed = false; }
+  constructor({ directory, model, models, aiEnabled = false, poolFactory = makePool }) { this.store = new Store(directory); this.credentials = new CredentialStore(directory); this.pools = new Map(); this.model = model; this.models = models; this.aiEnabled = aiEnabled; this.poolFactory = poolFactory; this.disposed = false; }
   async init() { await this.store.load(); await this.credentials.load(); return this; }
   pool(id) { if (this.disposed) fail('插件已停用', 'DISABLED', 503); let pool = this.pools.get(id); if(!pool && Object.hasOwn(this.credentials.data,id)){const config=this.store.data.connections.find(c=>c.id===id);if(config){pool=this.poolFactory({...config,password:this.credentials.data[id]});this.pools.set(id,pool);}} if (!pool) fail('连接尚未解锁，请重新输入密码连接', 'LOCKED', 409); return pool; }
   async dispatch(body, signal = new AbortController().signal) {
     if (this.disposed) fail('插件已停用', 'DISABLED', 503);
-    only(body, ['action','connection','connectionId','plan','page','pageSize','name','view','viewId','prompt','allowedTables','shareRows','sessionId']);
+    only(body, ['action','connection','connectionId','plan','page','pageSize','name','view','viewId','prompt','allowedTables','shareRows','sessionId','selection','field','search','offset']);
     const { action, connectionId } = body;
     if (action === 'state') return { connections: this.store.data.connections.map(c=>({...c, connected:this.pools.has(c.id),hasSavedPassword:Object.hasOwn(this.credentials.data,c.id)})), views:this.store.data.views, aiEnabled:this.aiEnabled, version:'0.1.0' };
+    if (action === 'models') return this.models ? this.models() : {groups:[],unavailable:[]};
+    if (action === 'columnValues') return columnValues(this.pool(connectionId),body.plan,body.field,{search:body.search,offset:body.offset,signal});
     if (action === 'connect') {
       let input = body.connection; const old=this.store.data.connections.find(c=>c.id===input?.id); if(input?.rememberPassword && !input.password && old && ['host','port','user'].every(k=>String(input[k]??(k==='host'?'127.0.0.1':''))===String(old[k])) && Object.hasOwn(this.credentials.data,old.id)) input={...input,password:this.credentials.data[old.id]}; connectionConfig(input);
       const id = input.id && this.store.data.connections.some(c=>c.id===input.id) ? input.id : randomUUID();
@@ -57,7 +59,7 @@ export class GridService {
         const result=await execute(pool,body.plan,{page:body.page??0,pageSize:25,signal}); sample=result.rows.slice(0,20);
       }
       if(JSON.stringify({allowedTables,sample}).length>60000) fail('模型上下文过大，请减少授权表或关闭结果共享');
-      const raw=await this.model({system:SYSTEM,input:{request:body.prompt,allowedTables,currentPlan:body.plan,sample, sampleLimit:20},sessionId:body.sessionId,signal});
+      const raw=await this.model({system:SYSTEM,input:{request:body.prompt,allowedTables,currentPlan:body.plan,sample, sampleLimit:20},sessionId:body.sessionId,selection:body.selection,signal});
       const decoded=decodePlan(raw,allowedTables); if(decoded.clarification) return decoded;
       const result=await execute(pool,decoded.plan,{signal}); return {...decoded,result};
     }

@@ -14,10 +14,13 @@ dsh plugin --profile web add https://github.com/HeShen-1/dsh-pg-grid/releases/do
 
 Refresh DSH and open **数据表** in the sidebar. Enable or disable the plugin from DSH's plugin manager. If the entry does not appear, restart DSH when convenient. The current DSH version may retain an already-loaded sidebar entry after disabling the host plugin; its API is unregistered and queries stop.
 
+The source checkout includes newer features than the pinned v0.1.0 release below. Build and install a checkout to use them.
+
 ## Features / 功能
 
 - Local loopback PostgreSQL connections, table/schema/view discovery and server-side pagination.
 - Nested AND/OR filters and multi-column sorting over the complete matching dataset.
+- Excel-style column-header menus: ascending/descending sort, searchable paged value choices, include/exclude checkboxes, conditions and clearing filters. Header filters persist in saved views and apply to exports; NULL and empty strings remain distinct. Ordinary and aggregate columns support filters; pivots support row dimensions.
 - Same-database inner/left equality joins, including multi-column join keys.
 - Field-based computed columns: arithmetic, rounding, conditions, null handling, concatenation and date parts.
 - Grouping and count/sum/average/min/max; pivot tables with totals recomputed from source rows.
@@ -49,7 +52,13 @@ This is local **plaintext** storage, not an encrypted vault: it does not protect
 
 The natural-language adapter is implemented but **disabled by default** (`aiEnabled: false` in `cordis.patch.yml`). Ordinary browsing, refresh, export and saved views never call a model.
 
-If explicitly enabled, the AI action uses the current DSH session's selected provider/model, falling back to the default selection. Only selected table schemas, the current rules, the request, and optionally up to 20 current-page rows are sent to that provider. Model output must pass the same closed query compiler and selected-table scope checks as manual rules. The adapter has offline tests; live-provider behavior and billing have not been validated for this release. Enabling it can incur provider charges.
+The AI panel lists models configured in DSH settings. If explicitly enabled, an explicit choice routes the request to that provider/model; otherwise it follows the current session selection or the DSH default. Explicit selections are checked against the available model directory before dispatch. Only selected table schemas, the current rules, the request, and optionally up to 20 current-page rows are sent to that provider. Model output must pass the same closed query compiler and selected-table scope checks as manual rules. Offline tests cover routing, unavailable-model rejection and metadata isolation. Three bounded GLM-5.3-Flash calls on the configured DSH Coding Plan route validated filtering, multi-column sorting and a same-database inner join against complete independent read-only SQL results. This does not validate other providers or establish actual billed cost. Enabling AI can consume provider quota or incur charges.
+
+### Bounded local validation
+
+A local `$DSH_HOME/pg-grid/ai-validation.json` (default `~/.dsh/pg-grid/ai-validation.json`) can temporarily authorize a controlled validation run. It is never shipped with this repository. The authorization specifies `enabled`, `provider`, `model`, `maxCalls`, `maxCny` and a `calls` ledger. Each attempt is recorded before inference, survives plugin reloads, and failures consume a slot. Limits are at most three calls, no result-row sharing, 16,000 UTF-8 input bytes and 4,000 output tokens. Set `enabled` to false after testing.
+
+The 0.2 CNY reservation per attempt is a conservative allowance for the specifically validated low-cost route, **not a provider-independent billing meter or an account spending cap**. Verify endpoint, prices, token limits and retry behavior before granting a new authorization; never use this allowance for an arbitrary expensive model. Keep authorization and usage files private. The release configuration remains `aiEnabled: false`.
 
 ## Development and validation
 

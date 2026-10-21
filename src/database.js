@@ -1,6 +1,6 @@
 import pg from 'pg';
 import Decimal from 'decimal.js';
-import { compile, sources, fail } from './query.js';
+import { compile, sources, fail, ident } from './query.js';
 export const MAX_EXPORT = 100000;
 const preserve = new Set([20, 1700, 700, 701, 1082, 1114, 1184, 114, 3802]);
 const types = { getTypeParser: (oid, format) => preserve.has(oid) && format !== 'binary' ? value => value : pg.types.getTypeParser(oid, format) };
@@ -96,7 +96,7 @@ export async function execute(pool, plan, { page = 0, pageSize = 100, exportAll 
   const start = performance.now();
   return read(pool, async client => {
     const compiled = compile(plan, await catalog(client));
-    const warningCount = (await client.query(compiled.warningsSql, compiled.values)).rows[0].count;
+    const warningCount = (await client.query(compiled.warningsSql, compiled.warningsValues)).rows[0].count;
     let rows, fields = compiled.fields, total, totals = null;
     if (compiled.pivot) {
       const raw = (await client.query(compiled.sql + ` LIMIT ${MAX_EXPORT + 1}`, compiled.values)).rows;
@@ -113,6 +113,22 @@ export async function execute(pool, plan, { page = 0, pageSize = 100, exportAll 
     return { rows, fields, total, totals, page, pageSize, updatedAt: new Date().toISOString(), elapsedMs: Math.round(performance.now() - start),
       warnings: warningCount !== '0' ? [`${warningCount} 行出现除零：对应计算值为 NULL，请修正计算规则。`] : [] };
   }, signal);
+}
+/** Distinct choices come from the complete filtered relation, never the current page. */
+export async function columnValues(pool, plan, field, {search='', offset=0, signal}={}) {
+  if (typeof search !== 'string' || search.length > 200 || !Number.isInteger(offset) || offset < 0 || offset > 100000) fail('候选值参数无效');
+  if (plan.pivot) {
+    if (!(plan.groupBy??[]).includes(field)) fail('透视表仅支持行维度的列筛选');
+    plan={...plan,pivot:undefined,select:plan.groupBy,groupBy:[],measures:[],sort:[]};
+  }
+  return read(pool, async client => {
+    const compiled = compile({...plan,columnFilters:(plan.columnFilters??[]).filter(c=>c.field!==field)},await catalog(client));
+    if (!compiled.fields.some(f=>f.id===field)) fail('筛选字段不存在');
+    const col=ident(field), values=[...compiled.values,search];
+    const sql=`SELECT DISTINCT ${col}::text AS value FROM (${compiled.sql}) AS choices WHERE ($${values.length}::text = '' OR pg_catalog.strpos(pg_catalog.lower(${col}::text), pg_catalog.lower($${values.length})) > 0) ORDER BY value NULLS FIRST LIMIT 101 OFFSET ${offset}`;
+    const rows=(await client.query(sql,values)).rows;
+    return {values:rows.slice(0,100).map(r=>r.value),hasMore:rows.length>100};
+  },signal);
 }
 export function csv(result) {
   const cell = v => {
