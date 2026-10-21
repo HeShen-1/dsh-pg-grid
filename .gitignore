@@ -1,0 +1,8 @@
+node_modules/
+.local/
+*.tgz
+lib/dev.js
+docs/evidence/
+.env*
+credentials.json
+views.json

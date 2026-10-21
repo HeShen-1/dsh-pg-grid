@@ -1,0 +1,61 @@
+{
+  "name": "dsh-pg-grid",
+  "version": "0.1.0",
+  "description": "DSH local PostgreSQL read-only data workbench",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js",
+    "dev": "node scripts/dev.mjs",
+    "test:pg": "node --test test/integration.pg.js"
+  },
+  "dependencies": {
+    "pg": "8.16.3",
+    "decimal.js": "10.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HeShen-1/dsh-pg-grid.git"
+  },
+  "homepage": "https://github.com/HeShen-1/dsh-pg-grid#readme",
+  "bugs": {
+    "url": "https://github.com/HeShen-1/dsh-pg-grid/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "postgresql",
+    "data-grid"
+  ],
+  "packageManager": "pnpm@10.28.0"
+}

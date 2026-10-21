@@ -1,0 +1,5 @@
+- insert:
+    - id: pg-grid
+      name: dsh-pg-grid
+      config:
+        aiEnabled: false
